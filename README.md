@@ -43,13 +43,14 @@ make open
 
 > `make test` запускает тесты в Docker (если Docker доступен).  
 > `make allure` использует Allure CLI из WSL или из Docker-образа.  
-> `make open` поднимает локальный HTTP-сервер для отчета и открывает ссылку в Windows (WSL2) на `http://localhost:<port>/`.
+> `make open` поднимает локальный HTTP-сервер для отчета и печатает ссылку вида `http://localhost:<port>/`.
 > `make serve-report` запускает HTTP-сервер в foreground и печатает URL.
 
 ---
 
 ##  Рекомендуемые команды (Docker + WSL)
 
+- В WSL надёжнее и проще запускать через Docker (меньше проблем с Chromium/драйвером).
 - **Тесты в Docker (рекомендуется):**
   ```bash
   make test
@@ -113,7 +114,7 @@ make open
 make serve-report
 ```
 
-Команда выведет URL вида `http://localhost:<port>/`. В WSL2 Windows открывает этот URL через `explorer.exe`.
+Команда выведет URL вида `http://localhost:<port>/`. Откройте ссылку вручную в браузере.
 Скрипт предпочитает `allure serve allure-results` (если установлен Allure CLI), иначе использует `python -m http.server`.
 
 Если установлен Allure CLI:
@@ -141,7 +142,7 @@ make open
 make serve-report
 ```
 
-Команда выведет URL вида `http://localhost:<port>/`. В WSL2 Windows открывает этот URL через `explorer.exe`.
+Команда выведет URL вида `http://localhost:<port>/`. Откройте ссылку вручную в браузере.
 
 ---
 
@@ -176,7 +177,8 @@ docker build -t aqa .
 
 **WSL / Linux:**
 ```bash
-docker run --rm -v $(pwd)/allure-results:/app/allure-results aqa
+docker run --rm --user $(id -u):$(id -g) \
+  -v $(pwd)/allure-results:/app/allure-results aqa
 ```
 
 **Windows PowerShell:**
@@ -187,6 +189,7 @@ docker run --rm -v ${PWD}\allure-results:/app/allure-results aqa
 ### Генерация Allure отчета через Docker (если нет Allure CLI в WSL)
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/allure-results:/app/allure-results \
   -v $(pwd)/allure-report:/app/allure-report \
   aqa allure generate allure-results -o allure-report --clean
@@ -206,7 +209,7 @@ Workflow:
 - запускает тесты в контейнере
 - сохраняет `allure-results` как artifact
 
-Файл: `github/workflows/ci.yml`
+Файл: `.github/workflows/ci.yml`
 
 ---
 
@@ -265,8 +268,7 @@ export CHROME_BIN="/snap/bin/chromium"
 make open
 ```
 
-Команда выведет URL вида `http://localhost:<port>/` и попробует открыть его через `explorer.exe`.
-Если `explorer.exe` возвращает ошибку, откройте ссылку, которую выведет команда `make open`, вручную.
+Команда выведет URL вида `http://localhost:<port>/`. Откройте ссылку вручную в браузере.
 
 ---
 

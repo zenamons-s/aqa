@@ -15,6 +15,7 @@ class LoginPage(BasePage):
         super().open("")
 
     def wait_loaded(self):
+        self.assert_url_equals(f"{self.base_url}/")
         self.wait.until(EC.visibility_of_element_located(self.LOGIN_LOGO))
         self.wait.until(EC.visibility_of_element_located(self.USERNAME))
         self.wait.until(EC.visibility_of_element_located(self.PASSWORD))
