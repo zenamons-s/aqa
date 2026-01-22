@@ -1,7 +1,9 @@
 import os
 import pathlib
-import tempfile
+import re
 import shutil
+import tempfile
+
 import allure
 import pytest
 from dotenv import load_dotenv
@@ -45,6 +47,50 @@ def _resolve_binary(env_var: str, candidates: list[str], label: str) -> str:
     )
 
 
+def _is_wsl() -> bool:
+    try:
+        version_info = pathlib.Path("/proc/version").read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+    return "microsoft" in version_info
+
+
+def _sanitize_filename(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", value).strip("_") or "session"
+
+
+def _prepare_log_dir() -> pathlib.Path:
+    results_dir = pathlib.Path("allure-results")
+    temp_dir = pathlib.Path(tempfile.gettempdir()) / "aqa-logs"
+
+    for candidate in (results_dir, temp_dir):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            test_file = candidate / ".write_test"
+            test_file.write_text("ok", encoding="utf-8")
+            test_file.unlink(missing_ok=True)
+            return candidate
+        except PermissionError:
+            continue
+        except OSError:
+            continue
+
+    return temp_dir
+
+
+def _ensure_log_file(path: pathlib.Path) -> pathlib.Path:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+        return path
+    except PermissionError:
+        fallback_dir = pathlib.Path(tempfile.gettempdir()) / "aqa-logs"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        fallback_path = fallback_dir / path.name
+        fallback_path.touch(exist_ok=True)
+        return fallback_path
+
+
 @pytest.fixture(scope="session")
 def base_url() -> str:
     return os.getenv("BASE_URL", "https://www.saucedemo.com").rstrip("/")
@@ -57,6 +103,7 @@ def _allure_environment(base_url):
     props = [
         f"BASE_URL={base_url}",
         f"HEADLESS={os.getenv('HEADLESS', 'true')}",
+        f"HEADLESS_MODE={os.getenv('HEADLESS_MODE', 'new')}",
         "IMPL=selenium",
     ]
     (results_dir / "environment.properties").write_text("\n".join(props), encoding="utf-8")
@@ -72,6 +119,7 @@ def pytest_runtest_makereport(item, call):
 @pytest.fixture
 def driver(request):
     headless = _env_bool("HEADLESS", "true")
+    headless_mode = os.getenv("HEADLESS_MODE", "new").strip().lower()
 
     chrome_bin = _resolve_binary(
         "CHROME_BIN",
@@ -109,23 +157,39 @@ def driver(request):
     options.add_argument("--disable-background-networking")
 
     if headless:
-        options.add_argument("--headless=new")
+        if headless_mode == "old":
+            options.add_argument("--headless")
+        else:
+            options.add_argument("--headless=new")
+
+    if _is_wsl() and "/snap/" in chrome_bin:
+        options.add_argument("--disable-features=VizDisplayCompositor")
+        options.add_argument("--remote-debugging-port=0")
+        options.add_argument("--no-zygote")
+        options.add_argument("--disable-software-rasterizer")
 
     # уникальный профиль (часто лечит "Chrome instance exited", особенно snap)
     profile_dir = tempfile.mkdtemp(prefix="chrome-profile-")
     options.add_argument(f"--user-data-dir={profile_dir}")
 
-    results_dir = pathlib.Path("allure-results")
-    results_dir.mkdir(exist_ok=True)
-    chromedriver_log = results_dir / "chromedriver.log"
-    log_handle = open(chromedriver_log, "w", encoding="utf-8")
-    service = Service(executable_path=driver_bin, log_output=log_handle)
+    log_dir = _prepare_log_dir()
+    node_id = _sanitize_filename(request.node.nodeid)
+    chrome_log = _ensure_log_file(log_dir / f"chrome-{node_id}.log")
+    chromedriver_log = _ensure_log_file(log_dir / f"chromedriver-{node_id}.log")
+
+    options.add_argument("--enable-logging=stderr")
+    options.add_argument("--v=1")
+    options.add_argument(f"--log-file={chrome_log}")
+
+    service = Service(
+        executable_path=driver_bin,
+        service_args=["--verbose", f"--log-path={chromedriver_log}"],
+    )
 
     try:
         drv = webdriver.Chrome(service=service, options=options)
         drv.implicitly_wait(0)
     except Exception:
-        log_handle.close()
         shutil.rmtree(profile_dir, ignore_errors=True)
         raise
 
@@ -146,9 +210,18 @@ def driver(request):
                 allure.attach(drv.page_source, name="page_html", attachment_type=allure.attachment_type.HTML)
             except Exception:
                 pass
+            for log_path, label in ((chrome_log, "chrome.log"), (chromedriver_log, "chromedriver.log")):
+                if log_path.exists():
+                    try:
+                        allure.attach.file(
+                            str(log_path),
+                            name=label,
+                            attachment_type=allure.attachment_type.TEXT,
+                        )
+                    except Exception:
+                        pass
 
         try:
             drv.quit()
         finally:
-            log_handle.close()
             shutil.rmtree(profile_dir, ignore_errors=True)
