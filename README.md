@@ -43,7 +43,7 @@ make open
 
 > `make test` запускает тесты в Docker (если Docker доступен).  
 > `make allure` использует Allure CLI из WSL или из Docker-образа.  
-> `make open` открывает отчет в Windows через `explorer.exe` (WSL).
+> `make open` поднимает локальный HTTP-сервер для отчета и открывает ссылку в Windows (WSL2).
 
 ---
 
@@ -75,6 +75,9 @@ pytest src/tests --alluredir=allure-results
 
 ##  Allure отчёт
 
+**Важно:** Allure HTML использует `fetch`/XHR и не работает при открытии через `file://...`  
+(браузеры блокируют `file://` по CORS/Origin). Отчет нужно открывать через HTTP.
+
 Если установлен Allure CLI:
 ```bash
 allure serve allure-results
@@ -87,6 +90,20 @@ allure serve allure-results
 ```bash
 allure generate allure-results -o allure-report --clean
 ```
+
+### Просмотр отчета через HTTP (WSL2 + Windows)
+
+Из Makefile (рекомендуется):
+```bash
+make open
+```
+
+или запустить сервер в foreground:
+```bash
+make serve
+```
+
+Команда выведет URL вида `http://localhost:<port>/`. В WSL2 Windows открывает этот URL через `explorer.exe`.
 
 ---
 
@@ -200,14 +217,14 @@ export CHROME_BIN="/snap/bin/chromium"
 
 ##  Открытие отчета в Windows из WSL
 
-Если отчет сгенерирован в WSL, открой его так:
+Открывать `allure-report/index.html` как `file://...` нельзя: браузер блокирует `fetch`/XHR.  
+Используйте HTTP-сервер:
+
 ```bash
-explorer.exe "$(wslpath -w "$(pwd)/allure-report/index.html")"
+make open
 ```
 
-Если `explorer.exe` возвращает ошибку, проверь:
-- что файл `allure-report/index.html` действительно существует;
-- что путь корректно преобразуется `wslpath -w`.
+Если `explorer.exe` возвращает ошибку, откройте ссылку, которую выведет команда `make open`, вручную.
 
 ---
 

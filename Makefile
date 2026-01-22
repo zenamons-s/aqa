@@ -4,7 +4,7 @@ REPORT=allure-report
 DOCKER_BIN=$(shell command -v docker 2>/dev/null)
 ALLURE_BIN=$(shell command -v allure 2>/dev/null)
 
-.PHONY: docker-build test allure open clean
+.PHONY: docker-build test allure serve open clean
 
 docker-build:
 	@if [ -z "$(DOCKER_BIN)" ]; then \
@@ -33,12 +33,11 @@ allure: docker-build
 			$(IMAGE) allure generate $(RESULTS) -o $(REPORT) --clean; \
 	fi
 
+serve:
+	@./scripts/allure_report_server.sh "$(REPORT)" serve
+
 open:
-	@if [ ! -f "$(REPORT)/index.html" ]; then \
-		echo "Allure report not found. Run 'make allure' first."; \
-		exit 1; \
-	fi
-	@explorer.exe "$$(wslpath -w "$$(pwd)/$(REPORT)/index.html")"
+	@./scripts/allure_report_server.sh "$(REPORT)" open
 	
 clean:
 	rm -rf $(RESULTS) $(REPORT)
