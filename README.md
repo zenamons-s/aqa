@@ -33,7 +33,7 @@
 
 ---
 
-##  Быстрый запуск через Makefile (рекомендуется)
+##  Запуск через Docker (рекомендуется)
 
 ```bash
 make test
@@ -48,30 +48,7 @@ make open
 
 ---
 
-##  Рекомендуемые команды (Docker + WSL)
-
-- В WSL надёжнее и проще запускать через Docker (меньше проблем с Chromium/драйвером).
-- **Тесты в Docker (рекомендуется):**
-  ```bash
-  make test
-  ```
-- **Просмотр Allure отчёта через HTTP (WSL + Windows):**
-  ```bash
-  make open
-  ```
-  Сервер поднимается на `http://localhost:<port>/` (не `file://`).
-- **Локальный запуск в WSL:**
-  ```bash
-  CHROME_BIN=/snap/bin/chromium \
-  CHROMEDRIVER_BIN=/usr/bin/chromedriver \
-  HEADLESS=true \
-  HEADLESS_MODE=new \
-  pytest src/tests --alluredir=allure-results
-  ```
-
----
-
-##  Локальный запуск (WSL без Docker)
+##  Локальный запуск в WSL2 без Docker
 
 ### 1) Установка зависимостей
 ```bash
@@ -82,18 +59,51 @@ pip install -r requirements.txt
 
 ### 2) Установка браузера и драйвера
 
-Вариант с apt (предпочтительно для стабильности):
+**Вариант A (рекомендуется): apt-пакеты вместо snap**
 ```bash
-sudo apt update && sudo apt install -y chromium chromium-driver
+sudo snap remove chromium || true
+sudo apt update
+sudo apt install -y chromium-browser chromium-chromedriver
 ```
 
-Если chromium установлен через snap, бинарь обычно лежит в `/snap/bin/chromium`.
-В этом случае задайте `CHROME_BIN` вручную (см. ниже).
+**Вариант B: если Chromium через snap**
+```bash
+export CHROME_BIN=/snap/bin/chromium
+export CHROMEDRIVER_BIN=/snap/chromium/current/usr/lib/chromium-browser/chromedriver
+```
+
+Проверьте версии и пути:
+```bash
+make debug-driver
+```
 
 ### 3) Запуск тестов + сбор Allure results
 ```bash
 pytest src/tests --alluredir=allure-results
 ```
+
+Быстрые команды:
+```bash
+make debug-driver
+make test-local
+make test-local-wsl
+```
+
+---
+
+##  Просмотр Allure отчета в WSL2
+
+- **Через Allure CLI и Windows браузер:**
+  ```bash
+  allure serve allure-results
+  ```
+  Откройте в Windows браузере URL вида `http://localhost:<port>/`.
+
+- **Или через генерацию отчета:**
+  ```bash
+  allure generate allure-results -o allure-report --clean
+  explorer.exe "$(wslpath -w allure-report/index.html)"
+  ```
 
 ---
 
@@ -102,47 +112,13 @@ pytest src/tests --alluredir=allure-results
 **Важно:** Allure HTML использует `fetch`/XHR и подгружает `data/*.json`, поэтому не работает при открытии через `file://...`  
 (браузеры блокируют `file://` по CORS/Origin). Отчет нужно открывать через HTTP.
 
-### WSL + Windows (рекомендуется)
+Быстрый путь через Makefile:
 ```bash
-make test
 make allure
 make open
 ```
 
-или запуск сервера в foreground:
-```bash
-make serve-report
-```
-
-Команда выведет URL вида `http://localhost:<port>/`. Откройте ссылку вручную в браузере.
 Скрипт предпочитает `allure serve allure-results` (если установлен Allure CLI), иначе использует `python -m http.server`.
-
-Если установлен Allure CLI:
-```bash
-allure serve allure-results
-```
-
-> В WSL Allure не всегда может открыть браузер автоматически — это нормально.  
-> Открывай ссылку вручную (обычно `http://localhost:<port>`).
-
-Чтобы сгенерировать HTML отчет:
-```bash
-allure generate allure-results -o allure-report --clean
-```
-
-### Просмотр отчета через HTTP (WSL2 + Windows)
-
-Из Makefile (рекомендуется):
-```bash
-make open
-```
-
-или запустить сервер в foreground:
-```bash
-make serve-report
-```
-
-Команда выведет URL вида `http://localhost:<port>/`. Откройте ссылку вручную в браузере.
 
 ---
 
@@ -232,43 +208,17 @@ cp .env.example .env
 
 ---
 
-##  WSL заметка (локальный запуск без Docker)
+##  Troubleshooting
 
-Если запускаешь тесты в WSL локально, установи браузер и драйвер:
+### Ошибки и расшифровки
+
+- `Status code 46` у chromedriver — несовместимый драйвер/сборка/путь (часто snap + драйвер от apt).
+- `PermissionError` в `allure-results` — права на каталоги после `docker run`.
+
+Команда для исправления прав:
 ```bash
-sudo apt update && sudo apt install -y chromium chromium-driver
+sudo chown -R $USER:$USER allure-results allure-report .pytest_cache artifacts || true
 ```
-
-И задай пути (в текущем терминале):
-```bash
-export CHROME_BIN="$(which chromium-browser 2>/dev/null || which chromium)"
-export CHROMEDRIVER_BIN="$(which chromedriver)"
-export HEADLESS=true
-export HEADLESS_MODE=new
-```
-
-После этого:
-```bash
-pytest src/tests --alluredir=allure-results
-```
-
-Если Chromium установлен через snap, попробуй:
-```bash
-export CHROME_BIN="/snap/bin/chromium"
-```
-
----
-
-##  Открытие отчета в Windows из WSL
-
-Открывать `allure-report/index.html` как `file://...` нельзя: браузер блокирует `fetch`/XHR.  
-Используйте HTTP-сервер:
-
-```bash
-make open
-```
-
-Команда выведет URL вида `http://localhost:<port>/`. Откройте ссылку вручную в браузере.
 
 ---
 

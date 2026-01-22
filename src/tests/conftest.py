@@ -2,6 +2,8 @@ import os
 import pathlib
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 
 import allure
@@ -19,17 +21,7 @@ def _env_bool(name: str, default: str = "true") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "y")
 
 
-def _resolve_binary(env_var: str, candidates: list[str], label: str) -> str:
-    env_value = os.getenv(env_var)
-    if env_value:
-        env_path = pathlib.Path(env_value)
-        if env_path.exists():
-            return str(env_path)
-        pytest.fail(
-            f"{label} not found at {env_value}. "
-            f"Update {env_var} or install {label.lower()}."
-        )
-
+def _resolve_from_candidates(candidates: list[str], label: str) -> str:
     for candidate in candidates:
         candidate_path = pathlib.Path(candidate)
         if candidate_path.is_absolute():
@@ -41,29 +33,130 @@ def _resolve_binary(env_var: str, candidates: list[str], label: str) -> str:
         if resolved:
             return resolved
 
-    pytest.fail(
+    raise RuntimeError(
         f"{label} not found. Checked: {', '.join(candidates)}. "
-        f"Install {label.lower()} or set {env_var}."
+        f"Install {label.lower()} or set CHROME_BIN/CHROMEDRIVER_BIN."
     )
 
 
-def _is_wsl() -> bool:
+def detect_wsl() -> bool:
+    for path in ("/proc/version", "/proc/sys/kernel/osrelease"):
+        try:
+            version_info = pathlib.Path(path).read_text(encoding="utf-8").lower()
+        except OSError:
+            continue
+        if "microsoft" in version_info:
+            return True
+    return False
+
+
+def resolve_chrome_binary() -> str:
+    env_value = os.getenv("CHROME_BIN")
+    if env_value:
+        env_path = pathlib.Path(env_value)
+        if env_path.exists():
+            return str(env_path)
+        raise RuntimeError(f"CHROME_BIN set but not found at {env_value}.")
+
+    candidates = [
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "/snap/bin/chromium",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/opt/google/chrome/chrome",
+    ]
+    return _resolve_from_candidates(candidates, "Chrome/Chromium")
+
+
+def resolve_chromedriver_binary(chrome_bin: str) -> str:
+    env_value = os.getenv("CHROMEDRIVER_BIN")
+    if env_value:
+        env_path = pathlib.Path(env_value)
+        if env_path.exists():
+            return str(env_path)
+        raise RuntimeError(f"CHROMEDRIVER_BIN set but not found at {env_value}.")
+
+    is_snap = "/snap/" in chrome_bin or chrome_bin == "/snap/bin/chromium"
+    if is_snap:
+        candidates = [
+            "/snap/bin/chromedriver",
+            "/snap/chromium/current/usr/lib/chromium-browser/chromedriver",
+            "/snap/chromium/current/usr/lib/chromium/chromedriver",
+            "/var/lib/snapd/snap/chromium/current/usr/lib/chromium-browser/chromedriver",
+        ]
+        for candidate in candidates:
+            if pathlib.Path(candidate).exists():
+                return candidate
+        raise RuntimeError(
+            "Snap Chromium detected but chromedriver not found. "
+            "Install chromium-chromedriver (apt) or set CHROMEDRIVER_BIN manually."
+        )
+
+    candidates = [
+        "chromedriver",
+        "/usr/bin/chromedriver",
+        "/usr/lib/chromium/chromedriver",
+        "/usr/lib/chromium-browser/chromedriver",
+    ]
+    return _resolve_from_candidates(candidates, "Chromedriver")
+
+
+def _command_output(cmd: list[str]) -> str:
     try:
-        version_info = pathlib.Path("/proc/version").read_text(encoding="utf-8").lower()
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return "not found"
+    except OSError as exc:
+        return f"error: {exc}"
+
+    output = (result.stdout or "") + (result.stderr or "")
+    return output.strip() or "no output"
+
+
+def print_debug_banner(chrome_bin: str, driver_bin: str) -> None:
+    print("\n====== Selenium debug info ======")
+    print(f"uname -a: {_command_output(['uname', '-a'])}")
+    print(f"python -V: {_command_output([sys.executable, '-V'])}")
+    print(f"which chromium: {shutil.which('chromium') or 'not found'}")
+    print(f"which google-chrome: {shutil.which('google-chrome') or 'not found'}")
+    print(f"which chromedriver: {shutil.which('chromedriver') or 'not found'}")
+    if chrome_bin:
+        print(f"chromium --version: {_command_output([chrome_bin, '--version'])}")
+    if driver_bin:
+        print(f"chromedriver --version: {_command_output([driver_bin, '--version'])}")
+    print(f"env CHROME_BIN={os.getenv('CHROME_BIN', '')}")
+    print(f"env CHROMEDRIVER_BIN={os.getenv('CHROMEDRIVER_BIN', '')}")
+    print(f"env HEADLESS={os.getenv('HEADLESS', '')}")
+    print(f"env HEADLESS_MODE={os.getenv('HEADLESS_MODE', '')}")
+    print("=================================\n")
+
+
+def tail_file(path: pathlib.Path, n: int = 80) -> str:
+    if not path or not path.exists():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return False
-    return "microsoft" in version_info
+        return ""
+    return "\n".join(lines[-n:])
 
 
 def _sanitize_filename(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", value).strip("_") or "session"
 
 
-def _prepare_log_dir() -> pathlib.Path:
-    results_dir = pathlib.Path("allure-results")
-    temp_dir = pathlib.Path(tempfile.gettempdir()) / "aqa-logs"
-
-    for candidate in (results_dir, temp_dir):
+def _ensure_writable_dir(path: pathlib.Path, fallback_name: str) -> pathlib.Path:
+    fallback_dir = pathlib.Path(tempfile.gettempdir()) / fallback_name
+    for candidate in (path, fallback_dir):
         try:
             candidate.mkdir(parents=True, exist_ok=True)
             test_file = candidate / ".write_test"
@@ -74,8 +167,12 @@ def _prepare_log_dir() -> pathlib.Path:
             continue
         except OSError:
             continue
+    fallback_dir.mkdir(parents=True, exist_ok=True)
+    return fallback_dir
 
-    return temp_dir
+
+def _prepare_log_dir() -> pathlib.Path:
+    return _ensure_writable_dir(pathlib.Path("artifacts") / "selenium-logs", "aqa-logs")
 
 
 def _ensure_log_file(path: pathlib.Path) -> pathlib.Path:
@@ -84,11 +181,21 @@ def _ensure_log_file(path: pathlib.Path) -> pathlib.Path:
         path.touch(exist_ok=True)
         return path
     except PermissionError:
-        fallback_dir = pathlib.Path(tempfile.gettempdir()) / "aqa-logs"
-        fallback_dir.mkdir(parents=True, exist_ok=True)
+        fallback_dir = _ensure_writable_dir(pathlib.Path(tempfile.gettempdir()) / "aqa-logs", "aqa-logs")
         fallback_path = fallback_dir / path.name
         fallback_path.touch(exist_ok=True)
         return fallback_path
+
+
+def _ensure_allure_results_dir() -> pathlib.Path:
+    results_dir = pathlib.Path(os.getenv("ALLURE_RESULTS_DIR", "allure-results"))
+    ensured_dir = _ensure_writable_dir(results_dir, "aqa-allure-results")
+    if ensured_dir != results_dir:
+        print(
+            f"[allure] Results dir {results_dir} not writable. "
+            f"Using fallback {ensured_dir}."
+        )
+    return ensured_dir
 
 
 @pytest.fixture(scope="session")
@@ -98,8 +205,7 @@ def base_url() -> str:
 
 @pytest.fixture(scope="session", autouse=True)
 def _allure_environment(base_url):
-    results_dir = pathlib.Path("allure-results")
-    results_dir.mkdir(exist_ok=True)
+    results_dir = _ensure_allure_results_dir()
     props = [
         f"BASE_URL={base_url}",
         f"HEADLESS={os.getenv('HEADLESS', 'true')}",
@@ -121,27 +227,8 @@ def driver(request):
     headless = _env_bool("HEADLESS", "true")
     headless_mode = os.getenv("HEADLESS_MODE", "new").strip().lower()
 
-    chrome_bin = _resolve_binary(
-        "CHROME_BIN",
-        [
-            "chromium",
-            "chromium-browser",
-            "google-chrome",
-            "/snap/bin/chromium",
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-        ],
-        "Chrome/Chromium",
-    )
-    driver_bin = _resolve_binary(
-        "CHROMEDRIVER_BIN",
-        [
-            "chromedriver",
-            "/usr/bin/chromedriver",
-            "/usr/lib/chromium/chromedriver",
-        ],
-        "Chromedriver",
-    )
+    chrome_bin = resolve_chrome_binary()
+    driver_bin = resolve_chromedriver_binary(chrome_bin)
 
     options = Options()
     options.binary_location = chrome_bin
@@ -162,7 +249,7 @@ def driver(request):
         else:
             options.add_argument("--headless=new")
 
-    if _is_wsl() and "/snap/" in chrome_bin:
+    if detect_wsl() and "/snap/" in chrome_bin:
         options.add_argument("--disable-features=VizDisplayCompositor")
         options.add_argument("--remote-debugging-port=0")
         options.add_argument("--no-zygote")
@@ -190,6 +277,17 @@ def driver(request):
         drv = webdriver.Chrome(service=service, options=options)
         drv.implicitly_wait(0)
     except Exception:
+        print_debug_banner(chrome_bin, driver_bin)
+        if chromedriver_log:
+            print("---- chromedriver log tail ----")
+            print(tail_file(chromedriver_log, n=80))
+        if chrome_log:
+            print("---- chrome log tail ----")
+            print(tail_file(chrome_log, n=80))
+        print(
+            "Advice: set CHROME_BIN and CHROMEDRIVER_BIN manually if needed. "
+            "For WSL, prefer apt chromium + chromium-chromedriver or run via Docker."
+        )
         shutil.rmtree(profile_dir, ignore_errors=True)
         raise
 
