@@ -17,6 +17,34 @@ def _env_bool(name: str, default: str = "true") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "y")
 
 
+def _resolve_binary(env_var: str, candidates: list[str], label: str) -> str:
+    env_value = os.getenv(env_var)
+    if env_value:
+        env_path = pathlib.Path(env_value)
+        if env_path.exists():
+            return str(env_path)
+        pytest.fail(
+            f"{label} not found at {env_value}. "
+            f"Update {env_var} or install {label.lower()}."
+        )
+
+    for candidate in candidates:
+        candidate_path = pathlib.Path(candidate)
+        if candidate_path.is_absolute():
+            if candidate_path.exists():
+                return str(candidate_path)
+            continue
+
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+
+    pytest.fail(
+        f"{label} not found. Checked: {', '.join(candidates)}. "
+        f"Install {label.lower()} or set {env_var}."
+    )
+
+
 @pytest.fixture(scope="session")
 def base_url() -> str:
     return os.getenv("BASE_URL", "https://www.saucedemo.com").rstrip("/")
@@ -45,13 +73,27 @@ def pytest_runtest_makereport(item, call):
 def driver(request):
     headless = _env_bool("HEADLESS", "true")
 
-    chrome_bin = (
-        os.getenv("CHROME_BIN")
-        or shutil.which("chromium")
-        or shutil.which("chromium-browser")
-        or "/usr/bin/chromium"
+    chrome_bin = _resolve_binary(
+        "CHROME_BIN",
+        [
+            "chromium",
+            "chromium-browser",
+            "google-chrome",
+            "/snap/bin/chromium",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+        ],
+        "Chrome/Chromium",
     )
-    driver_bin = os.getenv("CHROMEDRIVER_BIN") or shutil.which("chromedriver") or "/usr/bin/chromedriver"
+    driver_bin = _resolve_binary(
+        "CHROMEDRIVER_BIN",
+        [
+            "chromedriver",
+            "/usr/bin/chromedriver",
+            "/usr/lib/chromium/chromedriver",
+        ],
+        "Chromedriver",
+    )
 
     options = Options()
     options.binary_location = chrome_bin
@@ -62,6 +104,9 @@ def driver(request):
     options.add_argument("--window-size=1280,720")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-background-networking")
 
     if headless:
         options.add_argument("--headless=new")
@@ -70,10 +115,19 @@ def driver(request):
     profile_dir = tempfile.mkdtemp(prefix="chrome-profile-")
     options.add_argument(f"--user-data-dir={profile_dir}")
 
-    service = Service(executable_path=driver_bin)
+    results_dir = pathlib.Path("allure-results")
+    results_dir.mkdir(exist_ok=True)
+    chromedriver_log = results_dir / "chromedriver.log"
+    log_handle = open(chromedriver_log, "w", encoding="utf-8")
+    service = Service(executable_path=driver_bin, log_output=log_handle)
 
-    drv = webdriver.Chrome(service=service, options=options)
-    drv.implicitly_wait(0)
+    try:
+        drv = webdriver.Chrome(service=service, options=options)
+        drv.implicitly_wait(0)
+    except Exception:
+        log_handle.close()
+        shutil.rmtree(profile_dir, ignore_errors=True)
+        raise
 
     try:
         yield drv
@@ -96,4 +150,5 @@ def driver(request):
         try:
             drv.quit()
         finally:
+            log_handle.close()
             shutil.rmtree(profile_dir, ignore_errors=True)
