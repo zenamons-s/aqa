@@ -36,13 +36,15 @@
 ##  Запуск через Docker (рекомендуется)
 
 ```bash
+make doctor
 make test
 make allure
 make open
 ```
 
+> `make doctor` печатает версии, проверяет файлы и делает быстрые проверки (включая Docker smoke, если доступен).  
 > `make test` запускает тесты в Docker (если Docker доступен).  
-> `make allure` использует Allure CLI из WSL или из Docker-образа.  
+> `make allure` запускает `make test` и генерирует Allure-отчёт в Docker.  
 > `make open` поднимает локальный HTTP-сервер для отчета и печатает ссылку вида `http://localhost:<port>/`.
 > `make serve-report` запускает HTTP-сервер в foreground и печатает URL.
 
@@ -79,7 +81,7 @@ make debug-driver
 
 ### 3) Запуск тестов + сбор Allure results
 ```bash
-pytest src/tests --alluredir=allure-results
+HEADLESS=true python -m pytest
 ```
 
 Быстрые команды:
@@ -102,7 +104,7 @@ make test-local-wsl
 - **Или через генерацию отчета:**
   ```bash
   allure generate allure-results -o allure-report --clean
-  explorer.exe "$(wslpath -w allure-report/index.html)"
+  explorer.exe allure-report/index.html
   ```
 
 ---
@@ -149,12 +151,12 @@ pytest src/tests -m flaky --reruns 2 --reruns-delay 1 --alluredir=allure-results
 docker build -t aqa .
 ```
 
-### Запуск (с сохранением `allure-results` на хост)
+### Запуск (с сохранением `allure-results` и `artifacts` на хост)
 
 **WSL / Linux:**
 ```bash
 docker run --rm --user $(id -u):$(id -g) \
-  -v $(pwd)/allure-results:/app/allure-results aqa
+  -v $(pwd):/app -w /app aqa pytest src/tests --alluredir=allure-results
 ```
 
 **Windows PowerShell:**
@@ -166,8 +168,7 @@ docker run --rm -v ${PWD}\allure-results:/app/allure-results aqa
 ```bash
 docker run --rm \
   --user $(id -u):$(id -g) \
-  -v $(pwd)/allure-results:/app/allure-results \
-  -v $(pwd)/allure-report:/app/allure-report \
+  -v $(pwd):/app -w /app \
   aqa allure generate allure-results -o allure-report --clean
 ```
 
@@ -195,10 +196,11 @@ Workflow:
 - `HEADLESS` (default: `true`)
 - `HEADLESS_MODE` (default: `new`, можно указать `old` для классического `--headless`)
 - `CHROME_BIN`, `CHROMEDRIVER_BIN` (полезно для локального запуска в WSL без Docker)
+- `CHROME_DEBUG_PIPE` (default: `true`, при `false` используется `--remote-debugging-port=0`)
 
 Пример:
 ```bash
-HEADLESS=false pytest src/tests --alluredir=allure-results
+HEADLESS=false python -m pytest
 ```
 
 Пример `.env`:
@@ -213,7 +215,9 @@ cp .env.example .env
 ### Ошибки и расшифровки
 
 - `Status code 46` у chromedriver — несовместимый драйвер/сборка/путь (часто snap + драйвер от apt).
-- `PermissionError` в `allure-results` — права на каталоги после `docker run`.
+- `chrome_crashpad_handler: --database is required` → падение Chromium. Решение: добавить флаги `--disable-crashpad/--no-crashpad` (уже включены).
+- `JAVA_HOME is not set` при `allure generate` → в образе нужен JRE (уже установлен).
+- `PermissionError` в `.pytest_cache` или `allure-results` — права на каталоги после `docker run` (фикс: cache_dir в `/tmp` и запуск под вашим UID).
 
 Команда для исправления прав:
 ```bash

@@ -12,7 +12,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     fi \
  && apt-get update -o Acquire::Retries=5 \
  && apt-get install -y --no-install-recommends --fix-missing \
-      chromium chromium-driver \
+      chromium chromium-driver default-jre-headless \
  && rm -rf /var/lib/apt/lists/*
 
 # Allure CLI (опционально, но теперь есть в образе)

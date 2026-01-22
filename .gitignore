@@ -8,3 +8,5 @@ venv/
 allure-results/
 allure-report/
 chromedriver.log
+.pytest_cache/
+artifacts/
