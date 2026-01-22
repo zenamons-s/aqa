@@ -27,14 +27,22 @@ RUN curl -fsSL -o /tmp/allure.tgz \
 # Пути для Selenium
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_BIN=/usr/bin/chromedriver
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+RUN groupadd -g 1000 aqa \
+ && useradd -m -u 1000 -g 1000 -s /bin/bash aqa \
+ && mkdir -p /app \
+ && mkdir -p /app/.pytest_cache /app/allure-results /app/allure-report /app/tmp /tmp/aqa-logs \
+ && chown -R aqa:aqa /app /tmp/aqa-logs
 
 WORKDIR /app
 
-COPY requirements.txt /app/requirements.txt
+COPY --chown=aqa:aqa requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /app
-RUN mkdir -p /app/allure-results
+COPY --chown=aqa:aqa . /app
 
 # По умолчанию контейнер просто запускает тесты и пишет в /app/allure-results
+USER aqa
 CMD ["pytest", "src/tests", "--alluredir=allure-results"]

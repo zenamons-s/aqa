@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 
 import allure
 import pytest
@@ -15,6 +16,8 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 
 load_dotenv()
+
+_DIAG_PRINTED = False
 
 
 def _env_bool(name: str, default: str = "true") -> bool:
@@ -48,6 +51,18 @@ def detect_wsl() -> bool:
         if "microsoft" in version_info:
             return True
     return False
+
+
+def detect_docker() -> bool:
+    cgroup_paths = ("/proc/1/cgroup", "/proc/self/cgroup")
+    for path in cgroup_paths:
+        try:
+            content = pathlib.Path(path).read_text(encoding="utf-8").lower()
+        except OSError:
+            continue
+        if any(token in content for token in ("docker", "kubepods", "containerd")):
+            return True
+    return pathlib.Path("/.dockerenv").exists()
 
 
 def resolve_chrome_binary() -> str:
@@ -173,7 +188,8 @@ def _ensure_writable_dir(path: pathlib.Path, fallback_name: str) -> pathlib.Path
 
 
 def _prepare_log_dir() -> pathlib.Path:
-    return _ensure_writable_dir(pathlib.Path("artifacts") / "selenium-logs", "aqa-logs")
+    desired = pathlib.Path(os.getenv("SELENIUM_LOG_DIR", "/app/tmp/aqa-logs"))
+    return _ensure_writable_dir(desired, "aqa-logs")
 
 
 def _ensure_log_file(path: pathlib.Path) -> pathlib.Path:
@@ -199,6 +215,66 @@ def _ensure_allure_results_dir() -> pathlib.Path:
     return ensured_dir
 
 
+def _is_writable_dir(path: pathlib.Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        test_file = path / ".write_test"
+        test_file.write_text("ok", encoding="utf-8")
+        test_file.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _prepare_chrome_session_dirs(node_id: str) -> dict[str, pathlib.Path]:
+    base_dir = _ensure_writable_dir(pathlib.Path("/app/tmp/aqa-chrome"), "aqa-chrome")
+    session_dir = pathlib.Path(
+        tempfile.mkdtemp(prefix=f"chrome-{node_id}-{uuid.uuid4().hex[:8]}-", dir=base_dir)
+    )
+    profile_dir = session_dir / "profile"
+    cache_dir = session_dir / "cache"
+    crash_dir = session_dir / "crash"
+    runtime_dir = session_dir / "run"
+    for candidate in (profile_dir, cache_dir, crash_dir, runtime_dir):
+        candidate.mkdir(parents=True, exist_ok=True)
+    return {
+        "base_dir": base_dir,
+        "session_dir": session_dir,
+        "profile_dir": profile_dir,
+        "cache_dir": cache_dir,
+        "crash_dir": crash_dir,
+        "runtime_dir": runtime_dir,
+    }
+
+
+def _print_startup_summary(
+    *,
+    chrome_bin: str,
+    driver_bin: str,
+    headless: bool,
+    headless_mode: str,
+    use_debug_pipe: bool,
+    dirs: dict[str, pathlib.Path],
+    log_dir: pathlib.Path,
+) -> None:
+    global _DIAG_PRINTED
+    if _DIAG_PRINTED:
+        return
+    _DIAG_PRINTED = True
+    print(
+        "[selenium] chromium init | "
+        f"headless={headless}({headless_mode}) "
+        f"debug_pipe={use_debug_pipe} "
+        f"docker={detect_docker()} wsl={detect_wsl()}"
+    )
+    print(
+        "[selenium] paths | "
+        f"chrome={chrome_bin} driver={driver_bin} "
+        f"profile={dirs['profile_dir']} cache={dirs['cache_dir']} "
+        f"crash={dirs['crash_dir']} logs={log_dir}"
+    )
+
+
 def _should_fallback_to_port(exc: Exception) -> bool:
     message = str(exc).lower()
     return "remote-debugging-pipe" in message and ("unknown" in message or "unrecognized" in message)
@@ -211,6 +287,8 @@ def _build_chrome_options(
     headless_mode: str,
     use_debug_pipe: bool,
     profile_dir: str,
+    cache_dir: str,
+    crash_dir: str,
     chrome_log: pathlib.Path,
     is_wsl_snap: bool,
 ) -> Options:
@@ -251,6 +329,8 @@ def _build_chrome_options(
 
     # уникальный профиль (часто лечит "Chrome instance exited", особенно snap)
     options.add_argument(f"--user-data-dir={profile_dir}")
+    options.add_argument(f"--disk-cache-dir={cache_dir}")
+    options.add_argument(f"--crash-dumps-dir={crash_dir}")
 
     options.add_argument("--enable-logging=stderr")
     options.add_argument("--v=1")
@@ -292,12 +372,30 @@ def driver(request):
     driver_bin = resolve_chromedriver_binary(chrome_bin)
     is_wsl_snap = detect_wsl() and "/snap/" in chrome_bin
 
-    profile_dir = tempfile.mkdtemp(prefix="chrome-profile-")
+    node_id = _sanitize_filename(request.node.nodeid)
+    session_dirs = _prepare_chrome_session_dirs(node_id)
+    profile_dir = str(session_dirs["profile_dir"])
+    cache_dir = str(session_dirs["cache_dir"])
+    crash_dir = str(session_dirs["crash_dir"])
 
     log_dir = _prepare_log_dir()
-    node_id = _sanitize_filename(request.node.nodeid)
     chrome_log = _ensure_log_file(log_dir / f"chrome-{node_id}.log")
     chromedriver_log = _ensure_log_file(log_dir / f"chromedriver-{node_id}.log")
+
+    runtime_dir = session_dirs["runtime_dir"]
+    existing_runtime = os.getenv("XDG_RUNTIME_DIR", "").strip()
+    if not existing_runtime or not _is_writable_dir(pathlib.Path(existing_runtime)):
+        os.environ["XDG_RUNTIME_DIR"] = str(runtime_dir)
+
+    _print_startup_summary(
+        chrome_bin=chrome_bin,
+        driver_bin=driver_bin,
+        headless=headless,
+        headless_mode=headless_mode,
+        use_debug_pipe=use_debug_pipe,
+        dirs=session_dirs,
+        log_dir=log_dir,
+    )
 
     service = Service(
         executable_path=driver_bin,
@@ -311,6 +409,8 @@ def driver(request):
             headless_mode=headless_mode,
             use_debug_pipe=use_debug_pipe,
             profile_dir=profile_dir,
+            cache_dir=cache_dir,
+            crash_dir=crash_dir,
             chrome_log=chrome_log,
             is_wsl_snap=is_wsl_snap,
         )
@@ -326,6 +426,8 @@ def driver(request):
                     headless_mode=headless_mode,
                     use_debug_pipe=False,
                     profile_dir=profile_dir,
+                    cache_dir=cache_dir,
+                    crash_dir=crash_dir,
                     chrome_log=chrome_log,
                     is_wsl_snap=is_wsl_snap,
                 )
@@ -343,7 +445,7 @@ def driver(request):
                     "Advice: set CHROME_BIN and CHROMEDRIVER_BIN manually if needed. "
                     "For WSL, prefer apt chromium + chromium-chromedriver or run via Docker."
                 )
-                shutil.rmtree(profile_dir, ignore_errors=True)
+                shutil.rmtree(session_dirs["session_dir"], ignore_errors=True)
                 raise
         else:
             print_debug_banner(chrome_bin, driver_bin)
@@ -357,7 +459,7 @@ def driver(request):
                 "Advice: set CHROME_BIN and CHROMEDRIVER_BIN manually if needed. "
                 "For WSL, prefer apt chromium + chromium-chromedriver or run via Docker."
             )
-            shutil.rmtree(profile_dir, ignore_errors=True)
+            shutil.rmtree(session_dirs["session_dir"], ignore_errors=True)
             raise
 
     try:
@@ -391,4 +493,4 @@ def driver(request):
         try:
             drv.quit()
         finally:
-            shutil.rmtree(profile_dir, ignore_errors=True)
+            shutil.rmtree(session_dirs["session_dir"], ignore_errors=True)
