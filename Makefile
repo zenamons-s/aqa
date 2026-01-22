@@ -34,12 +34,12 @@ allure: docker-build
 	fi
 
 serve-report:
-	@./scripts/allure_report_server.sh "$(REPORT)" serve
+	@./scripts/allure_report_server.sh "$(REPORT)" serve-report "$(RESULTS)"
 
 serve: serve-report
 
 open:
-	@./scripts/allure_report_server.sh "$(REPORT)" open
+	@./scripts/allure_report_server.sh "$(REPORT)" open "$(RESULTS)"
 	
 clean:
 	rm -rf $(RESULTS) $(REPORT)

@@ -43,8 +43,30 @@ make open
 
 > `make test` запускает тесты в Docker (если Docker доступен).  
 > `make allure` использует Allure CLI из WSL или из Docker-образа.  
-> `make open` поднимает локальный HTTP-сервер для отчета и открывает ссылку в Windows (WSL2).
+> `make open` поднимает локальный HTTP-сервер для отчета и открывает ссылку в Windows (WSL2) на `http://localhost:<port>/`.
 > `make serve-report` запускает HTTP-сервер в foreground и печатает URL.
+
+---
+
+##  Рекомендуемые команды (Docker + WSL)
+
+- **Тесты в Docker (рекомендуется):**
+  ```bash
+  make test
+  ```
+- **Просмотр Allure отчёта через HTTP (WSL + Windows):**
+  ```bash
+  make open
+  ```
+  Сервер поднимается на `http://localhost:<port>/` (не `file://`).
+- **Локальный запуск в WSL:**
+  ```bash
+  CHROME_BIN=/snap/bin/chromium \
+  CHROMEDRIVER_BIN=/usr/bin/chromedriver \
+  HEADLESS=true \
+  HEADLESS_MODE=new \
+  pytest src/tests --alluredir=allure-results
+  ```
 
 ---
 
@@ -92,6 +114,7 @@ make serve-report
 ```
 
 Команда выведет URL вида `http://localhost:<port>/`. В WSL2 Windows открывает этот URL через `explorer.exe`.
+Скрипт предпочитает `allure serve allure-results` (если установлен Allure CLI), иначе использует `python -m http.server`.
 
 Если установлен Allure CLI:
 ```bash
@@ -99,7 +122,7 @@ allure serve allure-results
 ```
 
 > В WSL Allure не всегда может открыть браузер автоматически — это нормально.  
-> Открывай ссылку вручную (обычно `http://localhost:<port>` или `http://127.0.0.1:<port>`).
+> Открывай ссылку вручную (обычно `http://localhost:<port>`).
 
 Чтобы сгенерировать HTML отчет:
 ```bash
@@ -191,6 +214,7 @@ Workflow:
 
 - `BASE_URL` (default: `https://www.saucedemo.com`)
 - `HEADLESS` (default: `true`)
+- `HEADLESS_MODE` (default: `new`, можно указать `old` для классического `--headless`)
 - `CHROME_BIN`, `CHROMEDRIVER_BIN` (полезно для локального запуска в WSL без Docker)
 
 Пример:
@@ -216,6 +240,8 @@ sudo apt update && sudo apt install -y chromium chromium-driver
 ```bash
 export CHROME_BIN="$(which chromium-browser 2>/dev/null || which chromium)"
 export CHROMEDRIVER_BIN="$(which chromedriver)"
+export HEADLESS=true
+export HEADLESS_MODE=new
 ```
 
 После этого:
@@ -239,6 +265,7 @@ export CHROME_BIN="/snap/bin/chromium"
 make open
 ```
 
+Команда выведет URL вида `http://localhost:<port>/` и попробует открыть его через `explorer.exe`.
 Если `explorer.exe` возвращает ошибку, откройте ссылку, которую выведет команда `make open`, вручную.
 
 ---
