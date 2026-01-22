@@ -44,6 +44,7 @@ make open
 > `make test` запускает тесты в Docker (если Docker доступен).  
 > `make allure` использует Allure CLI из WSL или из Docker-образа.  
 > `make open` поднимает локальный HTTP-сервер для отчета и открывает ссылку в Windows (WSL2).
+> `make serve-report` запускает HTTP-сервер в foreground и печатает URL.
 
 ---
 
@@ -75,8 +76,22 @@ pytest src/tests --alluredir=allure-results
 
 ##  Allure отчёт
 
-**Важно:** Allure HTML использует `fetch`/XHR и не работает при открытии через `file://...`  
+**Важно:** Allure HTML использует `fetch`/XHR и подгружает `data/*.json`, поэтому не работает при открытии через `file://...`  
 (браузеры блокируют `file://` по CORS/Origin). Отчет нужно открывать через HTTP.
+
+### WSL + Windows (рекомендуется)
+```bash
+make test
+make allure
+make open
+```
+
+или запуск сервера в foreground:
+```bash
+make serve-report
+```
+
+Команда выведет URL вида `http://localhost:<port>/`. В WSL2 Windows открывает этот URL через `explorer.exe`.
 
 Если установлен Allure CLI:
 ```bash
@@ -100,7 +115,7 @@ make open
 
 или запустить сервер в foreground:
 ```bash
-make serve
+make serve-report
 ```
 
 Команда выведет URL вида `http://localhost:<port>/`. В WSL2 Windows открывает этот URL через `explorer.exe`.
