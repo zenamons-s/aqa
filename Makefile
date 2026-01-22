@@ -4,7 +4,7 @@ REPORT=allure-report
 DOCKER_BIN=$(shell command -v docker 2>/dev/null)
 ALLURE_BIN=$(shell command -v allure 2>/dev/null)
 
-.PHONY: docker-build test allure serve open clean
+.PHONY: docker-build test allure serve-report serve open clean
 
 docker-build:
 	@if [ -z "$(DOCKER_BIN)" ]; then \
@@ -33,8 +33,10 @@ allure: docker-build
 			$(IMAGE) allure generate $(RESULTS) -o $(REPORT) --clean; \
 	fi
 
-serve:
+serve-report:
 	@./scripts/allure_report_server.sh "$(REPORT)" serve
+
+serve: serve-report
 
 open:
 	@./scripts/allure_report_server.sh "$(REPORT)" open
