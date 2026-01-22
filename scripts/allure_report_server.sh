@@ -40,12 +40,6 @@ PY
 
 URL="http://localhost:${PORT}/"
 
-open_url() {
-  if command -v explorer.exe >/dev/null 2>&1; then
-    explorer.exe "${URL}" >/dev/null 2>&1 || true
-  fi
-}
-
 serve_allure_results() {
   if [ -z "${ALLURE_BIN}" ]; then
     return 1
@@ -58,7 +52,6 @@ serve_allure_results() {
     nohup "${ALLURE_BIN}" serve "${RESULTS_DIR}" --host localhost --port "${PORT}" \
       >/tmp/allure-serve.log 2>&1 &
     echo "Allure report server started at: ${URL}"
-    open_url
     return 0
   fi
 
@@ -76,7 +69,6 @@ serve_report_dir() {
     nohup python3 -m http.server "${PORT}" --directory "${REPORT_DIR}" --bind 0.0.0.0 \
       >/tmp/allure-server.log 2>&1 &
     echo "Allure report server started at: ${URL}"
-    open_url
     return 0
   fi
 

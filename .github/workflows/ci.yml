@@ -31,6 +31,7 @@ jobs:
           rm -rf allure-results
           mkdir -p allure-results
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
             -v "${{ github.workspace }}/allure-results:/app/allure-results" \
             -e HEADLESS=true \
             -e BASE_URL=https://www.saucedemo.com \

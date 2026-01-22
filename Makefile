@@ -3,6 +3,9 @@ RESULTS=allure-results
 REPORT=allure-report
 DOCKER_BIN=$(shell command -v docker 2>/dev/null)
 ALLURE_BIN=$(shell command -v allure 2>/dev/null)
+HOST_UID=$(shell id -u)
+HOST_GID=$(shell id -g)
+DOCKER_USER=$(HOST_UID):$(HOST_GID)
 
 .PHONY: docker-build test allure serve-report serve open clean
 
@@ -19,7 +22,9 @@ docker-build:
 
 test: docker-build
 	mkdir -p $(RESULTS)
-	docker run --rm -v "$$PWD/$(RESULTS):/app/$(RESULTS)" $(IMAGE)
+	docker run --rm --user $(DOCKER_USER) \
+		-v "$$PWD/$(RESULTS):/app/$(RESULTS)" \
+		$(IMAGE)
 
 allure: docker-build
 	@if [ -d "$(REPORT)" ]; then rm -rf $(REPORT); fi
@@ -28,6 +33,7 @@ allure: docker-build
 	else \
 		mkdir -p $(REPORT); \
 		docker run --rm \
+			--user $(DOCKER_USER) \
 			-v "$$PWD/$(RESULTS):/app/$(RESULTS)" \
 			-v "$$PWD/$(REPORT):/app/$(REPORT)" \
 			$(IMAGE) allure generate $(RESULTS) -o $(REPORT) --clean; \
