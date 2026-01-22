@@ -137,6 +137,7 @@ def print_debug_banner(chrome_bin: str, driver_bin: str) -> None:
     print(f"env CHROMEDRIVER_BIN={os.getenv('CHROMEDRIVER_BIN', '')}")
     print(f"env HEADLESS={os.getenv('HEADLESS', '')}")
     print(f"env HEADLESS_MODE={os.getenv('HEADLESS_MODE', '')}")
+    print(f"env CHROME_DEBUG_PIPE={os.getenv('CHROME_DEBUG_PIPE', '')}")
     print("=================================\n")
 
 
@@ -198,6 +199,65 @@ def _ensure_allure_results_dir() -> pathlib.Path:
     return ensured_dir
 
 
+def _should_fallback_to_port(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "remote-debugging-pipe" in message and ("unknown" in message or "unrecognized" in message)
+
+
+def _build_chrome_options(
+    *,
+    chrome_bin: str,
+    headless: bool,
+    headless_mode: str,
+    use_debug_pipe: bool,
+    profile_dir: str,
+    chrome_log: pathlib.Path,
+    is_wsl_snap: bool,
+) -> Options:
+    options = Options()
+    options.binary_location = chrome_bin
+
+    # стабильность в WSL/Docker/CI
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1280,720")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-background-networking")
+
+    options.add_argument("--disable-crash-reporter")
+    options.add_argument("--disable-breakpad")
+    options.add_argument("--disable-crashpad")
+    options.add_argument("--no-crashpad")
+    options.add_argument("--disable-features=Crashpad")
+
+    if headless:
+        if headless_mode == "old":
+            options.add_argument("--headless")
+        else:
+            options.add_argument("--headless=new")
+
+    if is_wsl_snap:
+        options.add_argument("--disable-features=VizDisplayCompositor")
+        options.add_argument("--no-zygote")
+        options.add_argument("--disable-software-rasterizer")
+
+    if use_debug_pipe:
+        options.add_argument("--remote-debugging-pipe")
+    else:
+        options.add_argument("--remote-debugging-port=0")
+
+    # уникальный профиль (часто лечит "Chrome instance exited", особенно snap)
+    options.add_argument(f"--user-data-dir={profile_dir}")
+
+    options.add_argument("--enable-logging=stderr")
+    options.add_argument("--v=1")
+    options.add_argument(f"--log-file={chrome_log}")
+    return options
+
+
 @pytest.fixture(scope="session")
 def base_url() -> str:
     return os.getenv("BASE_URL", "https://www.saucedemo.com").rstrip("/")
@@ -226,47 +286,18 @@ def pytest_runtest_makereport(item, call):
 def driver(request):
     headless = _env_bool("HEADLESS", "true")
     headless_mode = os.getenv("HEADLESS_MODE", "new").strip().lower()
+    use_debug_pipe = _env_bool("CHROME_DEBUG_PIPE", "true")
 
     chrome_bin = resolve_chrome_binary()
     driver_bin = resolve_chromedriver_binary(chrome_bin)
+    is_wsl_snap = detect_wsl() and "/snap/" in chrome_bin
 
-    options = Options()
-    options.binary_location = chrome_bin
-
-    # стабильность в WSL/Docker/CI
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1280,720")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-background-networking")
-
-    if headless:
-        if headless_mode == "old":
-            options.add_argument("--headless")
-        else:
-            options.add_argument("--headless=new")
-
-    if detect_wsl() and "/snap/" in chrome_bin:
-        options.add_argument("--disable-features=VizDisplayCompositor")
-        options.add_argument("--remote-debugging-port=0")
-        options.add_argument("--no-zygote")
-        options.add_argument("--disable-software-rasterizer")
-
-    # уникальный профиль (часто лечит "Chrome instance exited", особенно snap)
     profile_dir = tempfile.mkdtemp(prefix="chrome-profile-")
-    options.add_argument(f"--user-data-dir={profile_dir}")
 
     log_dir = _prepare_log_dir()
     node_id = _sanitize_filename(request.node.nodeid)
     chrome_log = _ensure_log_file(log_dir / f"chrome-{node_id}.log")
     chromedriver_log = _ensure_log_file(log_dir / f"chromedriver-{node_id}.log")
-
-    options.add_argument("--enable-logging=stderr")
-    options.add_argument("--v=1")
-    options.add_argument(f"--log-file={chrome_log}")
 
     service = Service(
         executable_path=driver_bin,
@@ -274,22 +305,60 @@ def driver(request):
     )
 
     try:
+        options = _build_chrome_options(
+            chrome_bin=chrome_bin,
+            headless=headless,
+            headless_mode=headless_mode,
+            use_debug_pipe=use_debug_pipe,
+            profile_dir=profile_dir,
+            chrome_log=chrome_log,
+            is_wsl_snap=is_wsl_snap,
+        )
         drv = webdriver.Chrome(service=service, options=options)
         drv.implicitly_wait(0)
-    except Exception:
-        print_debug_banner(chrome_bin, driver_bin)
-        if chromedriver_log:
-            print("---- chromedriver log tail ----")
-            print(tail_file(chromedriver_log, n=80))
-        if chrome_log:
-            print("---- chrome log tail ----")
-            print(tail_file(chrome_log, n=80))
-        print(
-            "Advice: set CHROME_BIN and CHROMEDRIVER_BIN manually if needed. "
-            "For WSL, prefer apt chromium + chromium-chromedriver or run via Docker."
-        )
-        shutil.rmtree(profile_dir, ignore_errors=True)
-        raise
+    except Exception as exc:
+        if use_debug_pipe and _should_fallback_to_port(exc):
+            print("[selenium] remote-debugging-pipe unsupported, falling back to --remote-debugging-port=0")
+            try:
+                options = _build_chrome_options(
+                    chrome_bin=chrome_bin,
+                    headless=headless,
+                    headless_mode=headless_mode,
+                    use_debug_pipe=False,
+                    profile_dir=profile_dir,
+                    chrome_log=chrome_log,
+                    is_wsl_snap=is_wsl_snap,
+                )
+                drv = webdriver.Chrome(service=service, options=options)
+                drv.implicitly_wait(0)
+            except Exception:
+                print_debug_banner(chrome_bin, driver_bin)
+                if chromedriver_log:
+                    print("---- chromedriver log tail ----")
+                    print(tail_file(chromedriver_log, n=80))
+                if chrome_log:
+                    print("---- chrome log tail ----")
+                    print(tail_file(chrome_log, n=80))
+                print(
+                    "Advice: set CHROME_BIN and CHROMEDRIVER_BIN manually if needed. "
+                    "For WSL, prefer apt chromium + chromium-chromedriver or run via Docker."
+                )
+                shutil.rmtree(profile_dir, ignore_errors=True)
+                raise
+        else:
+            print_debug_banner(chrome_bin, driver_bin)
+            if chromedriver_log:
+                print("---- chromedriver log tail ----")
+                print(tail_file(chromedriver_log, n=80))
+            if chrome_log:
+                print("---- chrome log tail ----")
+                print(tail_file(chrome_log, n=80))
+            print(
+                "Advice: set CHROME_BIN and CHROMEDRIVER_BIN manually if needed. "
+                "For WSL, prefer apt chromium + chromium-chromedriver or run via Docker."
+            )
+            shutil.rmtree(profile_dir, ignore_errors=True)
+            raise
 
     try:
         yield drv

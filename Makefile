@@ -1,13 +1,13 @@
 IMAGE=aqa
 RESULTS=allure-results
 REPORT=allure-report
+ARTIFACTS=artifacts
 DOCKER_BIN=$(shell command -v docker 2>/dev/null)
-ALLURE_BIN=$(shell command -v allure 2>/dev/null)
 HOST_UID=$(shell id -u)
 HOST_GID=$(shell id -g)
 DOCKER_USER=$(HOST_UID):$(HOST_GID)
 
-.PHONY: docker-build test allure serve-report serve open clean debug-driver test-local test-local-wsl
+.PHONY: docker-build test allure doctor serve-report serve open clean debug-driver test-local test-local-wsl
 
 docker-build:
 	@if [ -z "$(DOCKER_BIN)" ]; then \
@@ -21,22 +21,47 @@ docker-build:
 	docker build -t $(IMAGE) .
 
 test: docker-build
-	mkdir -p $(RESULTS)
+	mkdir -p $(RESULTS) $(ARTIFACTS)
 	docker run --rm --user $(DOCKER_USER) \
-		-v "$$PWD/$(RESULTS):/app/$(RESULTS)" \
-		$(IMAGE)
+		-v "$$PWD:/app" \
+		-w /app \
+		-e ALLURE_RESULTS_DIR=/app/$(RESULTS) \
+		$(IMAGE) pytest src/tests --alluredir=$(RESULTS)
 
-allure: docker-build
+allure: test
 	@if [ -d "$(REPORT)" ]; then rm -rf $(REPORT); fi
-	@if [ -n "$(ALLURE_BIN)" ]; then \
-		allure generate $(RESULTS) -o $(REPORT) --clean; \
+	mkdir -p $(REPORT)
+	docker run --rm \
+		--user $(DOCKER_USER) \
+		-v "$$PWD:/app" \
+		-w /app \
+		$(IMAGE) allure generate $(RESULTS) -o $(REPORT) --clean
+
+doctor:
+	@echo "== Versions =="
+	@python -V
+	@python -m pip -V
+	@command -v chromium >/dev/null 2>&1 && chromium --version || echo "chromium: not found"
+	@command -v chromedriver >/dev/null 2>&1 && chromedriver --version || echo "chromedriver: not found"
+	@command -v java >/dev/null 2>&1 && java -version || echo "java: not found"
+	@if [ -n "$(DOCKER_BIN)" ]; then docker --version; else echo "docker: not found"; fi
+	@echo "== Required files =="
+	@test -f requirements.txt
+	@test -f Dockerfile
+	@test -f README.md
+	@test -f pytest.ini
+	@test -d src/pages
+	@test -d src/tests
+	@echo "== Quick checks =="
+	@python -m compileall -q .
+	@python -m pytest -q --collect-only
+	@if [ -n "$(DOCKER_BIN)" ]; then \
+		echo "== Docker smoke =="; \
+		docker info >/dev/null 2>&1 || { echo "Docker daemon not running"; exit 1; }; \
+		docker build -t $(IMAGE) .; \
+		docker run --rm --user $(DOCKER_USER) -v "$$PWD:/app" -w /app $(IMAGE) pytest -q --collect-only; \
 	else \
-		mkdir -p $(REPORT); \
-		docker run --rm \
-			--user $(DOCKER_USER) \
-			-v "$$PWD/$(RESULTS):/app/$(RESULTS)" \
-			-v "$$PWD/$(REPORT):/app/$(REPORT)" \
-			$(IMAGE) allure generate $(RESULTS) -o $(REPORT) --clean; \
+		echo "Docker smoke skipped (docker not available)."; \
 	fi
 
 serve-report:
