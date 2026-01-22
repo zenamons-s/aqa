@@ -33,7 +33,21 @@
 
 ---
 
-##  Локальный запуск
+##  Быстрый запуск через Makefile (рекомендуется)
+
+```bash
+make test
+make allure
+make open
+```
+
+> `make test` запускает тесты в Docker (если Docker доступен).  
+> `make allure` использует Allure CLI из WSL или из Docker-образа.  
+> `make open` открывает отчет в Windows через `explorer.exe` (WSL).
+
+---
+
+##  Локальный запуск (WSL без Docker)
 
 ### 1) Установка зависимостей
 ```bash
@@ -42,7 +56,17 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2) Запуск тестов + сбор Allure results
+### 2) Установка браузера и драйвера
+
+Вариант с apt (предпочтительно для стабильности):
+```bash
+sudo apt update && sudo apt install -y chromium chromium-driver
+```
+
+Если chromium установлен через snap, бинарь обычно лежит в `/snap/bin/chromium`.
+В этом случае задайте `CHROME_BIN` вручную (см. ниже).
+
+### 3) Запуск тестов + сбор Allure results
 ```bash
 pytest src/tests --alluredir=allure-results
 ```
@@ -58,6 +82,11 @@ allure serve allure-results
 
 > В WSL Allure не всегда может открыть браузер автоматически — это нормально.  
 > Открывай ссылку вручную (обычно `http://localhost:<port>` или `http://127.0.0.1:<port>`).
+
+Чтобы сгенерировать HTML отчет:
+```bash
+allure generate allure-results -o allure-report --clean
+```
 
 ---
 
@@ -100,6 +129,14 @@ docker run --rm -v $(pwd)/allure-results:/app/allure-results aqa
 docker run --rm -v ${PWD}\allure-results:/app/allure-results aqa
 ```
 
+### Генерация Allure отчета через Docker (если нет Allure CLI в WSL)
+```bash
+docker run --rm \
+  -v $(pwd)/allure-results:/app/allure-results \
+  -v $(pwd)/allure-report:/app/allure-report \
+  aqa allure generate allure-results -o allure-report --clean
+```
+
 ### WSL2 примечание (если `docker: command not found` внутри WSL)
 Для использования Docker в WSL2 нужен Docker Desktop на Windows и включенная интеграция:
 - Docker Desktop → Settings → Resources → **WSL integration** → включить для `Ubuntu-24.04`
@@ -114,7 +151,7 @@ Workflow:
 - запускает тесты в контейнере
 - сохраняет `allure-results` как artifact
 
-Файл: `.github/workflows/ci.yml`
+Файл: `github/workflows/ci.yml`
 
 ---
 
@@ -127,6 +164,11 @@ Workflow:
 Пример:
 ```bash
 HEADLESS=false pytest src/tests --alluredir=allure-results
+```
+
+Пример `.env`:
+```bash
+cp .env.example .env
 ```
 
 ---
@@ -148,6 +190,24 @@ export CHROMEDRIVER_BIN="$(which chromedriver)"
 ```bash
 pytest src/tests --alluredir=allure-results
 ```
+
+Если Chromium установлен через snap, попробуй:
+```bash
+export CHROME_BIN="/snap/bin/chromium"
+```
+
+---
+
+##  Открытие отчета в Windows из WSL
+
+Если отчет сгенерирован в WSL, открой его так:
+```bash
+explorer.exe "$(wslpath -w "$(pwd)/allure-report/index.html")"
+```
+
+Если `explorer.exe` возвращает ошибку, проверь:
+- что файл `allure-report/index.html` действительно существует;
+- что путь корректно преобразуется `wslpath -w`.
 
 ---
 
